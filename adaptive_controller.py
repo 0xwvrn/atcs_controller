@@ -57,7 +57,7 @@ class AdaptiveTrafficController:
         startup_all_red_s: float = 2.0,
         startup_lost_time_s: float = 3.5,
         discharge_rate_pcu_per_s: float = 0.5,  # ~1800 PCU/hr per lane
-        max_wait_starvation_s: float = 65.0,
+        max_wait_starvation_s: float = 50.0,
         sensor_timeout_s: float = 5.0,
         nominal_fallback_pcu: float = 2.0,
     ):
@@ -78,8 +78,8 @@ class AdaptiveTrafficController:
         self.state_start_time_s = 0.0
         self.allocated_green_s = self.min_green_s
 
-        self.ns_red_start_time_s = 0.0
-        self.ew_red_start_time_s = 0.0
+        self.ns_wait_time_s = 0.0
+        self.ew_wait_time_s = 0.0
 
         self.approaches: Dict[str, ApproachDemand] = {
             "N": ApproachDemand(leg="N"),
@@ -194,11 +194,28 @@ class AdaptiveTrafficController:
         pcu_ns, ns_measured = self.get_phase_demand("N", "S")
         pcu_ew, ew_measured = self.get_phase_demand("E", "W")
 
+        # Track unserviced waiting times for anti-starvation protection
+        if self.state != SignalState.STATE_EW_GREEN:
+            if pcu_ew >= 1.0:
+                self.ew_wait_time_s += dt
+            else:
+                self.ew_wait_time_s = 0.0
+        else:
+            self.ew_wait_time_s = 0.0
+
+        if self.state != SignalState.STATE_NS_GREEN:
+            if pcu_ns >= 1.0:
+                self.ns_wait_time_s += dt
+            else:
+                self.ns_wait_time_s = 0.0
+        else:
+            self.ns_wait_time_s = 0.0
+
         # 1. Startup All-Red Hold
         if self.state == SignalState.STATE_ALL_RED_STARTUP:
             if elapsed_s >= self.startup_all_red_s:
                 self.allocated_green_s = self.calculate_green_time(pcu_ns)
-                self.ns_red_start_time_s = self.sim_time_s
+                self.ns_wait_time_s = 0.0
                 self._switch_state(
                     SignalState.STATE_NS_GREEN,
                     f"STARTUP_COMPLETE (alloc={self.allocated_green_s:.1f}s, NS_PCU={pcu_ns:.1f})"
@@ -213,8 +230,7 @@ class AdaptiveTrafficController:
                 gap_out = (elapsed_s >= self.min_green_s) and (pcu_ns < 0.5) and (pcu_ew >= 1.0)
 
             # Anti-Starvation Protection (Cross-street wait ceiling)
-            ew_wait_s = self.sim_time_s - self.ew_red_start_time_s
-            starvation = (ew_wait_s >= self.max_wait_starvation_s) and (pcu_ew >= 1.0)
+            starvation = (self.ew_wait_time_s >= self.max_wait_starvation_s) and (pcu_ew >= 1.0)
 
             # Maximum Green Expiration
             max_green_expired = elapsed_s >= self.allocated_green_s
@@ -222,7 +238,7 @@ class AdaptiveTrafficController:
             if gap_out:
                 self._switch_state(SignalState.STATE_NS_YELLOW, f"GAP_OUT (elapsed={elapsed_s:.1f}s)")
             elif starvation:
-                self._switch_state(SignalState.STATE_NS_YELLOW, f"ANTI_STARVATION (ew_wait={ew_wait_s:.1f}s)")
+                self._switch_state(SignalState.STATE_NS_YELLOW, f"ANTI_STARVATION (ew_wait={self.ew_wait_time_s:.1f}s)")
             elif max_green_expired:
                 self._switch_state(SignalState.STATE_NS_YELLOW, f"MAX_GREEN_EXPIRED (alloc={self.allocated_green_s:.1f}s)")
 
@@ -247,14 +263,13 @@ class AdaptiveTrafficController:
             if ew_measured and ns_measured:
                 gap_out = (elapsed_s >= self.min_green_s) and (pcu_ew < 0.5) and (pcu_ns >= 1.0)
 
-            ns_wait_s = self.sim_time_s - self.ns_red_start_time_s
-            starvation = (ns_wait_s >= self.max_wait_starvation_s) and (pcu_ns >= 1.0)
+            starvation = (self.ns_wait_time_s >= self.max_wait_starvation_s) and (pcu_ns >= 1.0)
             max_green_expired = elapsed_s >= self.allocated_green_s
 
             if gap_out:
                 self._switch_state(SignalState.STATE_EW_YELLOW, f"GAP_OUT (elapsed={elapsed_s:.1f}s)")
             elif starvation:
-                self._switch_state(SignalState.STATE_EW_YELLOW, f"ANTI_STARVATION (ns_wait={ns_wait_s:.1f}s)")
+                self._switch_state(SignalState.STATE_EW_YELLOW, f"ANTI_STARVATION (ns_wait={self.ns_wait_time_s:.1f}s)")
             elif max_green_expired:
                 self._switch_state(SignalState.STATE_EW_YELLOW, f"MAX_GREEN_EXPIRED (alloc={self.allocated_green_s:.1f}s)")
 

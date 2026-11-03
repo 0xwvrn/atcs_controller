@@ -1,5 +1,11 @@
 import sys
 from pathlib import Path
+
+# Ensure controller module directory is in sys.path
+_CONTROLLER_DIR = Path(__file__).resolve().parent.parent
+if str(_CONTROLLER_DIR) not in sys.path:
+    sys.path.insert(0, str(_CONTROLLER_DIR))
+
 from adaptive_controller import AdaptiveTrafficController, SignalState
 
 
