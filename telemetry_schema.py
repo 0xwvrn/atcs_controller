@@ -1,62 +1,41 @@
-"""
-telemetry_schema.py
-ATCS Standardized Telemetry Contract Definition & Validator
-
-Establishes the canonical telemetry interface between host vision pipelines
-and the real-time ESP32-S3 microcontroller firmware.
-
-Canonical JSON packet format (newline-delimited, strictly < 100 bytes):
-  {"approach":"N","Q":6,"PCU":7.5,"D_tail_m":28.4,"valid":true}\n
-"""
-
 import json
+import math
 from typing import Dict, Any, Tuple, Optional
-
 
 CANONICAL_APPROACHES = {"N", "S", "E", "W"}
 MAX_PACKET_LENGTH_BYTES = 128
 
 
-def build_telemetry_packet(
-    approach: str,
-    q: int,
-    pcu: float,
-    d_tail_m: float = 0.0,
-    valid: bool = True
-) -> str:
-    """
-    Constructs a compact newline-terminated JSON telemetry packet
-    guaranteed to conform to the ESP32-S3 TelemetryParser schema.
-    """
-    approach_clean = str(approach).strip().upper()
-    if approach_clean not in CANONICAL_APPROACHES:
+def _is_finite_number(v: Any) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def build_telemetry_packet(approach: str, q: int, pcu: float, d_tail_m: float = 0.0, valid: bool = True) -> str:
+    app = str(approach).strip().upper()
+    if app not in CANONICAL_APPROACHES:
         raise ValueError(f"Invalid approach '{approach}'. Must be one of {CANONICAL_APPROACHES}")
 
-    q_clean = max(0, int(q))
-    pcu_clean = max(0.0, round(float(pcu), 2))
-    d_tail_clean = max(0.0, round(float(d_tail_m), 2))
-    valid_clean = bool(valid)
+    if not _is_finite_number(q) or q < 0 or int(q) != q:
+        raise ValueError(f"Invalid 'Q': must be a finite non-negative integer, got {q}")
+    if not _is_finite_number(pcu) or pcu < 0.0:
+        raise ValueError(f"Invalid 'PCU': must be a finite non-negative float, got {pcu}")
+    if not _is_finite_number(d_tail_m) or d_tail_m < 0.0:
+        raise ValueError(f"Invalid 'D_tail_m': must be a finite non-negative float, got {d_tail_m}")
 
-    packet = {
-        "approach": approach_clean,
-        "Q": q_clean,
-        "PCU": pcu_clean,
-        "D_tail_m": d_tail_clean,
-        "valid": valid_clean
-    }
+    raw = json.dumps({
+        "approach": app,
+        "Q": max(0, int(q)),
+        "PCU": max(0.0, round(float(pcu), 2)),
+        "D_tail_m": max(0.0, round(float(d_tail_m), 2)),
+        "valid": bool(valid),
+    }, separators=(',', ':')) + "\n"
 
-    raw = json.dumps(packet, separators=(',', ':')) + "\n"
     if len(raw.encode('utf-8')) > MAX_PACKET_LENGTH_BYTES:
         raise ValueError(f"Packet exceeds {MAX_PACKET_LENGTH_BYTES} bytes limit: {len(raw)} bytes")
-
     return raw
 
 
 def parse_and_validate_telemetry(raw_line: str) -> Tuple[bool, Optional[Dict[str, Any]], str]:
-    """
-    Strict validation mirror of the ESP32 TelemetryParser::parse() logic.
-    Returns: (is_valid, parsed_dict_or_None, error_reason)
-    """
     if not raw_line:
         return False, None, "Empty packet"
 
@@ -65,7 +44,6 @@ def parse_and_validate_telemetry(raw_line: str) -> Tuple[bool, Optional[Dict[str
         return False, None, "Packet too short (< 7 bytes)"
     if len(line.encode('utf-8')) > MAX_PACKET_LENGTH_BYTES:
         return False, None, f"Packet too long (> {MAX_PACKET_LENGTH_BYTES} bytes)"
-
     if not (line.startswith('{') and line.endswith('}')):
         return False, None, "Missing root JSON object boundaries '{' and '}'"
 
@@ -77,57 +55,73 @@ def parse_and_validate_telemetry(raw_line: str) -> Tuple[bool, Optional[Dict[str
     if not isinstance(data, dict):
         return False, None, "Root must be a JSON object"
 
-    # 1. Approach identifier ('approach' or 'leg')
-    app = data.get("approach", data.get("leg"))
-    if app is None:
-        return False, None, "Missing required key 'approach' or 'leg'"
-    if "approach" in data and "leg" in data:
-        return False, None, "Ambiguous duplicate: both 'approach' and 'leg' present"
-    if str(app).upper() not in CANONICAL_APPROACHES:
-        return False, None, f"Invalid approach leg '{app}'"
+    try:
+        if "approach" in data and "leg" in data:
+            return False, None, "Ambiguous duplicate: both 'approach' and 'leg' present"
+        app = data.get("approach", data.get("leg"))
+        if app is None:
+            return False, None, "Missing required key 'approach' or 'leg'"
+        if str(app).upper() not in CANONICAL_APPROACHES:
+            return False, None, f"Invalid approach leg '{app}'"
 
-    # 2. Validity boolean
-    if "valid" not in data or not isinstance(data["valid"], bool):
-        return False, None, "Missing or non-boolean required key 'valid'"
+        if "valid" not in data or not isinstance(data["valid"], bool):
+            return False, None, "Missing or non-boolean required key 'valid'"
 
-    # 3. Queue count integer
-    if "Q" not in data or isinstance(data["Q"], bool) or not isinstance(data["Q"], (int, float)):
-        return False, None, "Missing or invalid numeric key 'Q'"
-    if data["Q"] < 0 or int(data["Q"]) != data["Q"]:
-        return False, None, "Key 'Q' must be a non-negative integer"
+        q = data.get("Q")
+        if not _is_finite_number(q) or q < 0 or int(q) != q:
+            return False, None, "Missing or invalid numeric key 'Q'"
 
-    # 4. PCU float
-    if "PCU" not in data or isinstance(data["PCU"], bool) or not isinstance(data["PCU"], (int, float)):
-        return False, None, "Missing or invalid numeric key 'PCU'"
-    if data["PCU"] < 0.0:
-        return False, None, "Key 'PCU' must be >= 0.0"
+        pcu = data.get("PCU")
+        if not _is_finite_number(pcu) or pcu < 0.0:
+            return False, None, "Missing or invalid numeric key 'PCU'"
 
-    # 5. D_tail_m optional float
-    d_tail = data.get("D_tail_m", data.get("d_tail", 0.0))
-    if "D_tail_m" in data and "d_tail" in data:
-        return False, None, "Ambiguous duplicate: both 'D_tail_m' and 'd_tail' present"
-    if isinstance(d_tail, bool) or not isinstance(d_tail, (int, float)) or d_tail < 0.0:
-        return False, None, "Optional 'D_tail_m' must be a non-negative float"
+        if "D_tail_m" in data and "d_tail" in data:
+            return False, None, "Ambiguous duplicate: both 'D_tail_m' and 'd_tail' present"
+        d_tail = data.get("D_tail_m", data.get("d_tail", 0.0))
+        if not _is_finite_number(d_tail) or d_tail < 0.0:
+            return False, None, "Optional 'D_tail_m' must be a non-negative float"
 
-    normalized = {
-        "approach": str(app).upper(),
-        "Q": int(data["Q"]),
-        "PCU": float(data["PCU"]),
-        "D_tail_m": float(d_tail),
-        "valid": bool(data["valid"])
-    }
-    return True, normalized, ""
+        return True, {
+            "approach": str(app).upper(),
+            "Q": int(q),
+            "PCU": float(pcu),
+            "D_tail_m": float(d_tail),
+            "valid": bool(data["valid"]),
+        }, ""
+    except Exception as e:
+        return False, None, f"Malformed packet: {e}"
 
 
 if __name__ == "__main__":
-    print("Testing ATCS Telemetry Contract...")
     sample = build_telemetry_packet("N", 6, 7.5, 28.4, True)
-    print(f"Generated sample ({len(sample)} bytes): {sample.strip()}")
     ok, parsed, err = parse_and_validate_telemetry(sample)
-    assert ok, f"Failed: {err}"
-    assert parsed["approach"] == "N"
-    assert parsed["Q"] == 6
-    assert parsed["PCU"] == 7.5
-    assert parsed["D_tail_m"] == 28.4
-    assert parsed["valid"] is True
-    print("Self-test passed successfully!")
+    assert ok and parsed["approach"] == "N" and parsed["Q"] == 6 and parsed["PCU"] == 7.5 and parsed["D_tail_m"] == 28.4
+
+    # Non-finite and malformed rejection tests
+    for non_finite in [float('nan'), float('inf'), float('-inf')]:
+        ok, _, err = parse_and_validate_telemetry(f'{{"approach":"N","Q":{non_finite},"PCU":1.0,"valid":true}}')
+        assert not ok, f"Expected rejection of Q={non_finite}"
+        ok, _, err = parse_and_validate_telemetry(f'{{"approach":"N","Q":1,"PCU":{non_finite},"valid":true}}')
+        assert not ok, f"Expected rejection of PCU={non_finite}"
+        ok, _, err = parse_and_validate_telemetry(f'{{"approach":"N","Q":1,"PCU":1.0,"D_tail_m":{non_finite},"valid":true}}')
+        assert not ok, f"Expected rejection of D_tail_m={non_finite}"
+
+        try:
+            build_telemetry_packet("N", non_finite, 1.0)
+            assert False, "build_telemetry_packet should raise on non-finite Q"
+        except ValueError:
+            pass
+
+        try:
+            build_telemetry_packet("N", 1, non_finite)
+            assert False, "build_telemetry_packet should raise on non-finite PCU"
+        except ValueError:
+            pass
+
+        try:
+            build_telemetry_packet("N", 1, 1.0, non_finite)
+            assert False, "build_telemetry_packet should raise on non-finite D_tail_m"
+        except ValueError:
+            pass
+
+    print("Telemetry contract self-test and non-finite validation passed.")

@@ -7,6 +7,7 @@ if str(_CONTROLLER_DIR) not in sys.path:
     sys.path.insert(0, str(_CONTROLLER_DIR))
 
 from adaptive_controller import AdaptiveTrafficController, SignalState
+from telemetry_schema import build_telemetry_packet, parse_and_validate_telemetry
 
 
 def test_scenario_1_initial_startup():
@@ -179,6 +180,98 @@ def test_safety_interlock_fault_injection():
     print("  [PASS] Out-of-order transition successfully intercepted. System triggered FAILSAFE_FLASH.")
 
 
+def test_numeric_validation_and_non_finite_rejection():
+    print("\n--- Numeric Validation & Non-Finite (NaN, Inf) Rejection ---")
+    non_finites = [float("nan"), float("inf"), float("-inf")]
+
+    # 1. build_telemetry_packet rejection
+    for val in non_finites:
+        try:
+            build_telemetry_packet("N", val, 5.0)
+            assert False, f"Expected ValueError for Q={val}"
+        except ValueError:
+            pass
+
+        try:
+            build_telemetry_packet("N", 5, val)
+            assert False, f"Expected ValueError for PCU={val}"
+        except ValueError:
+            pass
+
+        try:
+            build_telemetry_packet("N", 5, 5.0, val)
+            assert False, f"Expected ValueError for D_tail_m={val}"
+        except ValueError:
+            pass
+
+    # Boolean values rejected as numbers
+    try:
+        build_telemetry_packet("N", True, 5.0)
+        assert False, "Expected ValueError for boolean Q"
+    except ValueError:
+        pass
+
+    # 2. parse_and_validate_telemetry rejection without exceptions
+    test_packets = [
+        '{"approach":"N","Q":NaN,"PCU":1.0,"valid":true}',
+        '{"approach":"N","Q":Infinity,"PCU":1.0,"valid":true}',
+        '{"approach":"N","Q":-Infinity,"PCU":1.0,"valid":true}',
+        '{"approach":"N","Q":1,"PCU":NaN,"valid":true}',
+        '{"approach":"N","Q":1,"PCU":Infinity,"valid":true}',
+        '{"approach":"N","Q":1,"PCU":-Infinity,"valid":true}',
+        '{"approach":"N","Q":1,"PCU":1.0,"D_tail_m":NaN,"valid":true}',
+        '{"approach":"N","Q":1,"PCU":1.0,"D_tail_m":Infinity,"valid":true}',
+        '{"approach":"N","Q":1,"PCU":1.0,"D_tail_m":-Infinity,"valid":true}',
+        '{"approach":"N","Q":True,"PCU":1.0,"valid":true}',
+        '{"approach":"N","Q":1,"PCU":False,"valid":true}',
+        '{"approach":"N","Q":"five","PCU":1.0,"valid":true}',
+        '{"approach":"N","Q":-1,"PCU":1.0,"valid":true}',
+        '{"approach":"N","Q":1,"PCU":-1.0,"valid":true}',
+        '{"approach":"N","Q":1,"PCU":1.0,"D_tail_m":-1.0,"valid":true}',
+    ]
+    for raw in test_packets:
+        ok, parsed, err = parse_and_validate_telemetry(raw)
+        assert not ok, f"Expected rejection for packet: {raw}"
+        assert parsed is None, f"Expected None parsed data for packet: {raw}"
+        assert err != "", f"Expected non-empty error message for packet: {raw}"
+
+    # 3. AdaptiveTrafficController.update_approach rejection
+    ctrl = AdaptiveTrafficController()
+    ctrl.update_approach("N", 5, 20.0, 5.0, is_valid=True)
+    assert ctrl.approaches["N"].p_pcu == 5.0
+
+    for val in non_finites:
+        try:
+            ctrl.update_approach("N", val, 20.0, 5.0)
+            assert False, f"Expected ValueError for q_count={val}"
+        except ValueError:
+            pass
+
+        try:
+            ctrl.update_approach("N", 5, val, 5.0)
+            assert False, f"Expected ValueError for d_tail_m={val}"
+        except ValueError:
+            pass
+
+        try:
+            ctrl.update_approach("N", 5, 20.0, val)
+            assert False, f"Expected ValueError for p_pcu={val}"
+        except ValueError:
+            pass
+
+        try:
+            ctrl.update_approach("N", 5, 20.0, 5.0, timestamp_s=val)
+            assert False, f"Expected ValueError for timestamp_s={val}"
+        except ValueError:
+            pass
+
+    # Verify controller state remains healthy after rejected calls
+    assert ctrl.approaches["N"].p_pcu == 5.0
+    ctrl.tick(dt=0.1)
+    assert ctrl.state == SignalState.STATE_ALL_RED_STARTUP
+    print("  [PASS] Non-finite (NaN, Inf, -Inf) and malformed numeric inputs strictly rejected across schema and controller.")
+
+
 def main():
     print("=================================================================")
     print("  ATCS Adaptive Controller: Academic Verification Test Suite")
@@ -190,9 +283,10 @@ def main():
     test_scenario_4_maximum_green_reached()
     test_scenario_5_sensor_timeout_policy()
     test_safety_interlock_fault_injection()
+    test_numeric_validation_and_non_finite_rejection()
 
     print("\n=================================================================")
-    print("  ALL 6 ACADEMIC VERIFICATION SCENARIOS PASSED WITH ZERO ERRORS.")
+    print("  ALL 7 ACADEMIC VERIFICATION SCENARIOS PASSED WITH ZERO ERRORS.")
     print("=================================================================")
 
 
