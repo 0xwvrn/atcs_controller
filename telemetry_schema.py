@@ -2,7 +2,7 @@ import json
 import math
 from typing import Dict, Any, Tuple, Optional
 
-CANONICAL_APPROACHES = {"N", "S", "E", "W"}
+CANONICAL_APPROACHES = {"N", "S", "E", "W", "NE", "NW", "SE", "SW"}
 MAX_PACKET_LENGTH_BYTES = 128
 
 
@@ -10,7 +10,14 @@ def _is_finite_number(v: Any) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
 
 
-def build_telemetry_packet(approach: str, q: int, pcu: float, d_tail_m: float = 0.0, valid: bool = True) -> str:
+def build_telemetry_packet(
+    approach: str,
+    q: int,
+    pcu: float,
+    d_tail_m: float = 0.0,
+    valid: bool = True,
+    inflow_pcu: Optional[float] = None,
+) -> str:
     app = str(approach).strip().upper()
     if app not in CANONICAL_APPROACHES:
         raise ValueError(f"Invalid approach '{approach}'. Must be one of {CANONICAL_APPROACHES}")
@@ -21,14 +28,20 @@ def build_telemetry_packet(approach: str, q: int, pcu: float, d_tail_m: float = 
         raise ValueError(f"Invalid 'PCU': must be a finite non-negative float, got {pcu}")
     if not _is_finite_number(d_tail_m) or d_tail_m < 0.0:
         raise ValueError(f"Invalid 'D_tail_m': must be a finite non-negative float, got {d_tail_m}")
+    if inflow_pcu is not None and (not _is_finite_number(inflow_pcu) or inflow_pcu < 0.0):
+        raise ValueError(f"Invalid 'inflow_pcu': must be a finite non-negative float, got {inflow_pcu}")
 
-    raw = json.dumps({
+    payload: Dict[str, Any] = {
         "approach": app,
         "Q": max(0, int(q)),
         "PCU": max(0.0, round(float(pcu), 2)),
         "D_tail_m": max(0.0, round(float(d_tail_m), 2)),
         "valid": bool(valid),
-    }, separators=(',', ':')) + "\n"
+    }
+    if inflow_pcu is not None:
+        payload["inflow_pcu"] = max(0.0, round(float(inflow_pcu), 2))
+
+    raw = json.dumps(payload, separators=(',', ':')) + "\n"
 
     if len(raw.encode('utf-8')) > MAX_PACKET_LENGTH_BYTES:
         raise ValueError(f"Packet exceeds {MAX_PACKET_LENGTH_BYTES} bytes limit: {len(raw)} bytes")
@@ -81,13 +94,21 @@ def parse_and_validate_telemetry(raw_line: str) -> Tuple[bool, Optional[Dict[str
         if not _is_finite_number(d_tail) or d_tail < 0.0:
             return False, None, "Optional 'D_tail_m' must be a non-negative float"
 
-        return True, {
+        inflow = data.get("inflow_pcu", 0.0)
+        if not _is_finite_number(inflow) or inflow < 0.0:
+            return False, None, "Optional 'inflow_pcu' must be a non-negative float"
+
+        parsed_out: Dict[str, Any] = {
             "approach": str(app).upper(),
             "Q": int(q),
             "PCU": float(pcu),
             "D_tail_m": float(d_tail),
             "valid": bool(data["valid"]),
-        }, ""
+        }
+        if "inflow_pcu" in data:
+            parsed_out["inflow_pcu"] = float(inflow)
+
+        return True, parsed_out, ""
     except Exception as e:
         return False, None, f"Malformed packet: {e}"
 
