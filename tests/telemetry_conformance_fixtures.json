@@ -1,0 +1,133 @@
+[
+  {
+    "name": "valid_complete",
+    "raw": "{\"v\":1,\"approach\":\"N\",\"Q\":6,\"PCU\":7.5,\"D_tail_m\":28.4,\"pcu_upstream\":2.5,\"inflow_pcu\":2.5,\"arrival_rate_pcu_s\":0.35,\"calibrated\":true,\"fresh\":true,\"valid\":true,\"seq\":42}",
+    "expect_parse_ok": true,
+    "expect_valid": true,
+    "expect_calibrated": true,
+    "expect_fresh": true,
+    "expect_approach": "N",
+    "expect_q": 6,
+    "expect_pcu": 7.5,
+    "expect_d_tail_m": 28.4,
+    "expect_pcu_upstream": 2.5,
+    "expect_inflow_pcu": 2.5,
+    "expect_arrival_rate_pcu_s": 0.35,
+    "expect_seq": 42
+  },
+  {
+    "name": "valid_empty_queue",
+    "raw": "{\"v\":1,\"approach\":\"S\",\"Q\":0,\"PCU\":0.0,\"D_tail_m\":0.0,\"pcu_upstream\":0.0,\"inflow_pcu\":0.0,\"arrival_rate_pcu_s\":0.0,\"calibrated\":true,\"fresh\":true,\"valid\":true,\"seq\":1}",
+    "expect_parse_ok": true,
+    "expect_valid": true,
+    "expect_calibrated": true,
+    "expect_fresh": true,
+    "expect_approach": "S",
+    "expect_q": 0,
+    "expect_pcu": 0.0,
+    "expect_d_tail_m": 0.0,
+    "expect_pcu_upstream": 0.0,
+    "expect_inflow_pcu": 0.0,
+    "expect_arrival_rate_pcu_s": 0.0,
+    "expect_seq": 1
+  },
+  {
+    "name": "valid_uncalibrated_approx",
+    "raw": "{\"v\":1,\"approach\":\"E\",\"Q\":4,\"PCU\":4.5,\"D_tail_m\":22.0,\"pcu_upstream\":2.0,\"inflow_pcu\":2.0,\"arrival_rate_pcu_s\":0.4,\"calibrated\":false,\"fresh\":true,\"valid\":true,\"seq\":7}",
+    "expect_parse_ok": true,
+    "expect_valid": true,
+    "expect_calibrated": false,
+    "expect_fresh": true,
+    "expect_approach": "E",
+    "expect_q": 4,
+    "expect_pcu": 4.5,
+    "expect_d_tail_m": 0.0,
+    "expect_pcu_upstream": 0.0,
+    "expect_inflow_pcu": 0.0,
+    "expect_arrival_rate_pcu_s": 0.0,
+    "expect_seq": 7
+  },
+  {
+    "name": "invalid_observation",
+    "raw": "{\"v\":1,\"approach\":\"W\",\"Q\":5,\"PCU\":6.0,\"D_tail_m\":18.0,\"calibrated\":false,\"fresh\":true,\"valid\":false,\"seq\":9}",
+    "expect_parse_ok": true,
+    "expect_valid": false,
+    "expect_calibrated": false,
+    "expect_fresh": true,
+    "expect_approach": "W",
+    "expect_q": 0,
+    "expect_pcu": 0.0,
+    "expect_d_tail_m": 0.0,
+    "expect_pcu_upstream": 0.0,
+    "expect_inflow_pcu": 0.0,
+    "expect_arrival_rate_pcu_s": 0.0,
+    "expect_seq": 9
+  },
+  {
+    "name": "missing_optional_field",
+    "raw": "{\"approach\":\"N\",\"Q\":3,\"PCU\":3.5,\"valid\":true}",
+    "expect_parse_ok": true,
+    "expect_valid": true,
+    "expect_calibrated": true,
+    "expect_fresh": true,
+    "expect_approach": "N",
+    "expect_q": 3,
+    "expect_pcu": 3.5,
+    "expect_d_tail_m": 0.0,
+    "expect_pcu_upstream": 0.0,
+    "expect_inflow_pcu": 0.0,
+    "expect_arrival_rate_pcu_s": 0.0,
+    "expect_seq": 0
+  },
+  {
+    "name": "missing_required_field",
+    "raw": "{\"v\":1,\"approach\":\"N\",\"Q\":3,\"valid\":true}",
+    "expect_parse_ok": false
+  },
+  {
+    "name": "invalid_approach_unsupported_ne",
+    "raw": "{\"v\":1,\"approach\":\"NE\",\"Q\":3,\"PCU\":3.0,\"valid\":true}",
+    "expect_parse_ok": false
+  },
+  {
+    "name": "invalid_approach_unknown_z",
+    "raw": "{\"v\":1,\"approach\":\"Z\",\"Q\":3,\"PCU\":3.0,\"valid\":true}",
+    "expect_parse_ok": false
+  },
+  {
+    "name": "negative_queue_pcu",
+    "raw": "{\"v\":1,\"approach\":\"N\",\"Q\":3,\"PCU\":-1.5,\"valid\":true}",
+    "expect_parse_ok": false
+  },
+  {
+    "name": "non_finite_values",
+    "raw": "{\"v\":1,\"approach\":\"N\",\"Q\":3,\"PCU\":NaN,\"valid\":true}",
+    "expect_parse_ok": false
+  },
+  {
+    "name": "truncated_json",
+    "raw": "{\"v\":1,\"approach\":\"N\",\"Q\":3,\"PCU\":3.0,",
+    "expect_parse_ok": false
+  },
+  {
+    "name": "unknown_protocol_version",
+    "raw": "{\"v\":2,\"approach\":\"N\",\"Q\":3,\"PCU\":3.0,\"valid\":true}",
+    "expect_parse_ok": false
+  },
+  {
+    "name": "stale_observation",
+    "raw": "{\"v\":1,\"approach\":\"N\",\"Q\":8,\"PCU\":9.5,\"D_tail_m\":30.0,\"inflow_pcu\":4.0,\"calibrated\":true,\"fresh\":false,\"valid\":true,\"seq\":15}",
+    "expect_parse_ok": true,
+    "expect_valid": false,
+    "expect_calibrated": true,
+    "expect_fresh": false,
+    "expect_approach": "N",
+    "expect_q": 0,
+    "expect_pcu": 0.0,
+    "expect_d_tail_m": 0.0,
+    "expect_pcu_upstream": 0.0,
+    "expect_inflow_pcu": 0.0,
+    "expect_arrival_rate_pcu_s": 0.0,
+    "expect_seq": 15
+  }
+]

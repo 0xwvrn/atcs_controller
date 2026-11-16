@@ -6,7 +6,7 @@ import time
 from typing import Any, Dict, Generator, Optional
 
 from adaptive_controller import AdaptiveTrafficController, IntersectionTopology, SignalState
-from telemetry_schema import build_telemetry_packet as schema_build
+from telemetry_schema import MAX_PAYLOAD_BYTES, build_telemetry_packet as schema_build
 
 try:
     import serial
@@ -77,6 +77,52 @@ def build_telemetry_packet(
     leg: str, q_count: int, d_tail_m: float, pcu: float, is_valid: bool = True, inflow_pcu: float = 0.0
 ) -> str:
     return schema_build(approach=leg, q=q_count, pcu=pcu, d_tail_m=d_tail_m, valid=is_valid, inflow_pcu=inflow_pcu)
+
+
+def build_closed_loop_tx_packet(
+    leg: str,
+    q_count: int,
+    pcu: float,
+    d_tail_m: float,
+    inflow_pcu: float,
+    arrival_rate_pcu_s: float,
+    seq: int,
+    profile: Optional[str] = None,
+    topology: Optional[str] = None,
+    enable_moderato: Optional[bool] = None,
+) -> str:
+    """
+    Constructs a Canonical Schema v1 observation packet via build_telemetry_packet().
+    When runtime config commands are provided for the initial HIL handshake, attaches
+    profile/topology/moderato while enforcing the 511-byte payload limit.
+    """
+    raw_line = schema_build(
+        approach=leg,
+        q=q_count,
+        pcu=pcu,
+        d_tail_m=d_tail_m,
+        valid=True,
+        inflow_pcu=inflow_pcu,
+        pcu_upstream=inflow_pcu,
+        arrival_rate_pcu_s=arrival_rate_pcu_s,
+        calibrated=True,
+        fresh=True,
+        seq=seq,
+    )
+    if profile is None and topology is None and enable_moderato is None:
+        return raw_line
+
+    payload = json.loads(raw_line)
+    if profile is not None:
+        payload["profile"] = profile
+    if topology is not None:
+        payload["topology"] = topology
+    if enable_moderato is not None:
+        payload["moderato"] = bool(enable_moderato)
+    raw_cfg = json.dumps(payload, separators=(",", ":"), allow_nan=False)
+    if len(raw_cfg.encode("utf-8")) > MAX_PAYLOAD_BYTES:
+        raise ValueError(f"Config-bearing payload exceeds {MAX_PAYLOAD_BYTES} bytes limit: {len(raw_cfg)} bytes")
+    return raw_cfg + "\n"
 
 
 def generate_scenario_stream(
@@ -153,6 +199,7 @@ def run_closed_loop_demo(
     dt = 0.1
     steps = max(1, int(duration_s / dt))
     config_sent = False
+    tx_seq = 0
 
     print(
         f"# Closed-Loop Demo | Scenario={scenario_name} | Profile={profile} "
@@ -186,22 +233,25 @@ def run_closed_loop_demo(
                 for leg in ("N", "S", "E", "W"):
                     if not valid_flags[leg]:
                         continue
-                    pkt_dict: Dict[str, Any] = {
-                        "approach": leg,
-                        "Q": int(round(pcu_state[leg])),
-                        "PCU": round(pcu_state[leg], 2),
-                        "D_tail_m": round(pcu_state[leg] * 3.5, 2),
-                        "inflow_pcu": round(inflow_state[leg], 2),
-                        "valid": True,
-                    }
-                    if not config_sent and leg == "N":
-                        pkt_dict["profile"] = profile
-                        pkt_dict["topology"] = topology
-                        pkt_dict["moderato"] = enable_moderato
+                    tx_seq += 1
+                    send_cfg = (not config_sent and leg == "N")
+                    raw_pkt = build_closed_loop_tx_packet(
+                        leg=leg,
+                        q_count=int(round(pcu_state[leg])),
+                        pcu=round(pcu_state[leg], 2),
+                        d_tail_m=round(pcu_state[leg] * 3.5, 2),
+                        inflow_pcu=round(inflow_state[leg], 2),
+                        arrival_rate_pcu_s=round(arr_rates[leg], 3),
+                        seq=tx_seq,
+                        profile=profile if send_cfg else None,
+                        topology=topology if send_cfg else None,
+                        enable_moderato=enable_moderato if send_cfg else None,
+                    )
+                    if send_cfg:
                         config_sent = True
                     if ser_conn is not None:
                         try:
-                            ser_conn.write((json.dumps(pkt_dict) + "\n").encode("utf-8"))
+                            ser_conn.write(raw_pkt.encode("utf-8"))
                         except Exception:
                             pass
 

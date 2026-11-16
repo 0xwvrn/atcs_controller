@@ -23,7 +23,19 @@ class ModeratoRegime(Enum):
 
 
 class IntersectionTopology:
-    """Intersection stage ring topologies (2-phase, 3-stage, and A->B->A->C double-cycling)."""
+    """
+    Intersection stage ring topologies (2-phase, 3-stage, and A->B->A->C double-cycling).
+
+    Firmware-supported topologies (must match firmware/include/TrafficController.hpp):
+      - STANDARD_4WAY
+      - T_JUNCTION_3WAY_NS_E
+      - T_JUNCTION_3WAY_EW_N
+      - DOUBLE_CYCLE_NS_E_NS_W
+
+    Simulation-only experimental topologies (not supported in ESP32-S3 firmware):
+      - SIX_WAY_2PHASE
+      - THREE_STAGE_NS_E_W
+    """
     STANDARD_4WAY: Tuple[Tuple[str, ...], ...] = (("N", "S"), ("E", "W"))
     T_JUNCTION_3WAY_NS_E: Tuple[Tuple[str, ...], ...] = (("N", "S"), ("E",))
     T_JUNCTION_3WAY_EW_N: Tuple[Tuple[str, ...], ...] = (("E", "W"), ("N",))
@@ -189,8 +201,8 @@ class AdaptiveTrafficController:
             raise ValueError(f"Unknown approach leg: {leg}")
 
         for val, name in ((q_count, "q_count"), (d_tail_m, "d_tail_m"), (p_pcu, "p_pcu"), (inflow_pcu, "inflow_pcu")):
-            if isinstance(val, bool) or not isinstance(val, (int, float)) or not math.isfinite(val):
-                raise ValueError(f"Non-finite or invalid numeric value for {name}: {val}")
+            if isinstance(val, bool) or not isinstance(val, (int, float)) or not math.isfinite(val) or val < 0:
+                raise ValueError(f"Negative, non-finite, or invalid numeric value for {name}: {val}")
 
         if timestamp_s is not None and (
             isinstance(timestamp_s, bool) or not isinstance(timestamp_s, (int, float)) or not math.isfinite(timestamp_s)
@@ -198,12 +210,16 @@ class AdaptiveTrafficController:
             raise ValueError(f"Non-finite or invalid numeric value for timestamp_s: {timestamp_s}")
 
         app = self.approaches[leg]
-        app.q_count = max(0, int(q_count))
-        app.d_tail_m = max(0.0, float(d_tail_m))
-        app.p_pcu = max(0.0, float(p_pcu))
-        app.inflow_pcu = max(0.0, float(inflow_pcu))
+        if not is_valid:
+            app.is_valid = False
+            return
+
+        app.q_count = int(q_count)
+        app.d_tail_m = float(d_tail_m)
+        app.p_pcu = float(p_pcu)
+        app.inflow_pcu = float(inflow_pcu)
         app.last_seen_s = self.sim_time_s if timestamp_s is None else float(timestamp_s)
-        app.is_valid = is_valid
+        app.is_valid = True
 
     def get_approach_demand(self, leg: str) -> Tuple[float, bool]:
         app = self.approaches[leg]
@@ -302,8 +318,16 @@ class AdaptiveTrafficController:
         rate = self.get_phase_discharge_rate(num_concurrent_legs=num_concurrent_legs)
         return min(max(self.startup_lost_time_s + (phase_pcu / rate), self.min_green_s), self.max_green_s)
 
+    def is_complete_sensor_blackout(self) -> bool:
+        """True when every configured approach leg is unobserved, matching C++ MODE_FIXED_FALLBACK."""
+        configured_legs = {leg for stage in self.phase_approaches for leg in stage}
+        return all(not self.get_approach_demand(leg)[1] for leg in configured_legs)
+
     def _allocate_phase_green(self, phase_idx: int) -> Tuple[float, str]:
-        """Calculates green duration for stage index phase_idx using standard or MODERATO rules."""
+        """Calculates green duration for stage index phase_idx using fallback, standard, or MODERATO rules."""
+        if self.is_complete_sensor_blackout():
+            return self.fixed_fallback_green_s, f"FIXED_FALLBACK ({self.active_timing_profile_name})"
+
         phase_pcu, _ = self.get_stage_demand(phase_idx)
         tag = "+".join(self.phase_approaches[phase_idx]) if len(self.phase_approaches) > 2 else ("NS" if phase_idx == 0 else "EW")
 

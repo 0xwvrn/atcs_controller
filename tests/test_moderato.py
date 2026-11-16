@@ -122,8 +122,8 @@ def test_6_six_way_two_phase_topology_and_conflict_rejection():
         enable_moderato=True,
     )
     for leg, pcu in (("N", 6.0), ("S", 5.0), ("NE", 4.0), ("E", 3.0), ("W", 3.0), ("SW", 2.0)):
-        pkt = build_telemetry_packet(leg, int(pcu), pcu, 20.0, True, inflow_pcu=1.0)
-        ok, parsed, err = parse_and_validate_telemetry(pkt)
+        pkt = build_telemetry_packet(leg, int(pcu), pcu, 20.0, True, inflow_pcu=1.0, allow_extended_approaches=True)
+        ok, parsed, err = parse_and_validate_telemetry(pkt, allow_extended_approaches=True)
         assert ok, err
         ctrl_6way.update_approach(
             parsed["approach"], parsed["Q"], parsed["D_tail_m"], parsed["PCU"],
